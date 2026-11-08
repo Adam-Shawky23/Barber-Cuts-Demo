@@ -1,140 +1,159 @@
-# FRESH CUT - hairstyle try-on
+# FRESH CUT: AI hairstyle try-on for a barbershop
 
-A web app for the shop. A customer takes a selfie (or uploads one), picks a style
-(Bald, Rasta / Dreads, Skin fade, Buzz cut, Afro, Mohawk, Braids, Pompadour) or types
-their own, and the AI shows them with that haircut. They can save favourites to a
-lookbook and show the barber. Nothing is saved: no accounts, no database, photos are not stored.
+A web app built for a real barbershop. A customer takes a selfie (or uploads a photo), picks a
+haircut, and the AI shows them wearing it, keeping their face, skin tone, clothes and background
+the same. They save favourites to a lookbook and tap **Show the barber** to show the chosen cut
+full screen.
 
-The AI part is free. It uses a Hugging Face "Space" (a free hosted AI model).
+No accounts, no database, and no photos are stored. It runs entirely on free services.
 
-## 1. Run it on your computer
+> **Stack:** React 19 · TypeScript · Vite · Node.js / Express 5 · FLUX.1 Kontext (Hugging Face) · Vitest
+> · deployed on Render
 
-You need [Node.js](https://nodejs.org) (version 22.12 or newer).
+---
 
-1. Open a terminal in this folder.
-2. `npm install`
-3. Copy `.env.example` to a new file called `.env` (this holds your settings).
-4. `npm run dev`
-5. Open the address it prints (usually http://localhost:5173).
+## Features
 
-To run the finished version instead: `npm run build` then `npm start`, and open
-http://localhost:8787.
+- **Selfie or upload.** Live front camera with a mirrored preview, or a photo from the gallery.
+  Works in iOS Safari and Android Chrome, and can be installed to the home screen as a PWA.
+- **8 preset styles** (Bald, Rasta / Dreads, Skin fade, Buzz cut, Afro, Mohawk, Braids, Pompadour),
+  or describe your own in free text.
+- **Lookbook.** Every generated look is kept for the session. Customers can star favourites and
+  compare them.
+- **Show the barber.** A full-screen view of the chosen look to hand to the barber.
+- **New customer.** One tap wipes the session, so the app is safe on a shared shop tablet.
+- **Phone, tablet and desktop layouts.** The phone's back button and swipe-back move between
+  screens without losing looks.
+- **Never leaves customers stuck.** If the free AI is busy, it falls back to other services
+  automatically, and shows a friendly "try again" message only when all of them are busy.
 
-## 2. Settings (`.env`)
+## How it works
 
-| Setting | What it is |
-| --- | --- |
-| `HF_SPACE` | Which AI Space to use. Default: `black-forest-labs/FLUX.1-Kontext-Dev` |
-| `HF_ENDPOINT` | Which function of that Space to call. Default: `/infer` |
-| `HF_TOKEN` | Your free Hugging Face token. **Required for the online (Render) site**; optional only for a quick try on your own computer |
-| `PORT` | Port for the server. Default 8787 |
-| `HF_FALLBACK_SPACES` | Optional. Other Hugging Face Spaces to try (see "Backup AI services" below) |
-| `CF_ACCOUNT_ID`, `CF_API_TOKEN` | Optional, **free**. Cloudflare Workers AI, used when Hugging Face is busy or out of free quota |
-| `FAL_KEY` | Optional, paid. fal.ai key, used after Cloudflare |
-| `GEMINI_API_KEY` | Optional, paid. Google Gemini key, used after fal.ai |
+```mermaid
+flowchart LR
+  A[Browser<br/>React app] -- "selfie (resized ≤1024px JPEG)<br/>+ style id" --> B[Express API<br/>/api/tryon]
+  B --> C{Rate limiter<br/>per connection}
+  C -- ok --> D[Prompt builder]
+  D --> E[Fallback chain]
+  E --> F1[Hugging Face Space<br/>FLUX.1 Kontext]
+  E -. busy .-> F2[Extra HF Spaces]
+  E -. busy .-> F3[Cloudflare Workers AI<br/>free tier]
+  E -. busy .-> F4[fal.ai / Gemini<br/>optional, paid]
+  F1 & F2 & F3 & F4 -- edited image --> B
+  B -- "image + label" --> A
+```
 
-The token stays on the server. It is never sent to the browser or written to logs.
+1. **Client side**, the photo is decoded with EXIF rotation applied, scaled down to 1024px and sent
+   as a JPEG data URL. Smaller uploads mean faster generations and less of the free quota used.
+2. **The server** checks the input, applies a fair-use limit, and turns the chosen style into an
+   edit prompt such as *"Change only the person's hairstyle to a clean skin fade… Keep the face,
+   skin tone, expression, clothing and background identical."*
+3. **A provider chain** sends the request to the first AI service that is available and returns
+   the edited image. Nothing is written to disk or logged.
 
-### Get a free Hugging Face token
+## Engineering highlights
 
-1. Create a free account at https://huggingface.co.
-2. Go to Settings, then Access Tokens.
-3. Click "Create new token", choose type **Read**, give it any name, and create it.
-4. Copy the token into `.env` as `HF_TOKEN=hf_...`
+**Pluggable AI providers with automatic fallback** (`server/provider/`)
+Every AI service implements one small interface, `edit(image, prompt, signal) → image`.
+`createFallbackProvider` tries them in order. When a service reports "busy" or "out of quota", it
+is skipped for 5 minutes, so later customers go straight to the next service instead of waiting
+for the same timeout. The chain is built from environment variables. Adding a key enables that
+service, and no code changes are needed.
 
-Without a token the free allowance runs out after a couple of tries, and customers will
-see "The AI is busy right now. Try again in a minute." With a token you get a larger
-daily allowance. Even then the free tier can sometimes be busy; waiting a minute usually fixes it.
+**Fair-use rate limiting** (`server/rateLimit.ts`)
+A dependency-free limiter allows at most 2 concurrent generations and 10 per rolling minute per
+connection. It evicts idle keys so memory doesn't grow with every visitor, and it takes an
+injectable clock so tests are deterministic.
 
-**For the online site a token is required.** The anonymous allowance is counted per internet
-address, and Render's servers share their addresses with many other apps, so without a token
-the online site will almost always say the AI is busy. Skipping the token is only fine for a
-quick try on your own computer.
+**Cancelling abandoned work**
+If a customer leaves or retakes their photo mid-generation, the browser aborts the request. The
+server notices the closed connection and aborts the upstream AI call through an `AbortSignal`,
+so no quota is spent on a result nobody will see.
 
-### Fair-use limit
+**Security and privacy**
+- API keys live only in server-side environment variables. They are never sent to the browser,
+  never logged, and never committed (`.env` is gitignored, and `.env.example` has placeholders only).
+- Input is checked strictly: only `jpeg/png/webp` data URLs, an 8 MB body cap, free text limited
+  to 200 characters, and style ids from a fixed catalog shared by client and server.
+- Errors come back as short codes (`BUSY`, `TIMEOUT`, `FAILED`, `TOO_LARGE`) with no stack
+  traces or upstream details. `x-powered-by` is disabled.
+- Images exist only in memory for the length of the request and in the customer's browser tab.
 
-To stop one phone from using up the free AI allowance, the server allows at most 2 looks
-being made at the same time and 10 new looks per minute **per internet connection**. Everyone
-on the shop's Wi-Fi shares one internet connection, so the whole shop shares this limit. If it is
-reached, customers see the "busy" message and can try again a moment later.
+**Mobile details**
+- iOS Safari quirks: `playsinline` camera playback, an `<img>` fallback where
+  `createImageBitmap` options aren't supported, and no reliance on `crypto.randomUUID`.
+- Android gallery apps that return files with no MIME type are still accepted, and the image
+  decoder decides whether they're valid.
+- Screens are mirrored into `history.pushState`, so hardware back and swipe-back behave like a
+  native app.
+- Respects `prefers-reduced-motion`.
 
-## 3. Put it online (Render, free)
+**Predictable UI state** (`src/state/session.ts`)
+The whole session (selfie, looks, favourites, pending request, error, current screen) is one
+reducer with typed actions. That makes behaviour such as "a new selfie clears the current look"
+or "ignore Start while a look is generating" easy to reason about and to unit test.
 
-Customers need a real web address, and the phone camera only works on **HTTPS**
-(a plain `http://` address on your Wi-Fi will not open the camera, though uploading a photo still works).
-Render gives you HTTPS automatically.
+## Testing
 
-1. Put this project on GitHub.
-2. On https://render.com, choose New, then Web Service, and connect the GitHub repo.
-3. Build command: `npm ci --include=dev && npm run build`
-4. Start command: `npm start`
-5. Plan: Free.
-6. Under Environment, add `NODE_ENV` = `production` and `HF_TOKEN` (required, see above),
-   plus `HF_SPACE` / `HF_ENDPOINT` only if you change them.
-7. Deploy, then open the address Render gives you on your phone to test the camera.
+**115 tests across 12 files** (Vitest, Testing Library, Supertest), covering:
 
-The free Render plan goes to sleep when unused, so the first visit can take about a minute to load.
+- the API route: validation, rate limiting, error mapping, abort on disconnect
+- the fallback chain: ordering, busy cooldown, abort propagation
+- the Hugging Face provider: response parsing, busy and timeout mapping
+- the prompt builder and style catalog
+- the rate limiter, using a fake clock
+- image resizing and the API client
+- the session reducer
+- the Selfie, Studio and Lookbook screens
 
-### Put it on customers' phones like an app
+```bash
+npm test
+```
 
-The site works in Safari (iPhone/iPad) and Chrome (Android). It can also be added to the home
-screen, where it opens full screen with its own icon:
+## How I built it
 
-- **iPhone / iPad:** open the site in Safari, tap Share, then "Add to Home Screen".
-- **Android:** open the site in Chrome, tap the ⋮ menu, then "Add to Home screen" (or "Install app").
+I worked spec first and in small, test-driven steps. The commit history shows the progression:
 
-The phone's back button and swipe-back move between screens without losing the looks.
+1. **Design spec**: requirements gathered with the shop owner, covering the customer flow,
+   privacy rules and free-hosting constraints (`docs/superpowers/specs/`)
+2. **Implementation plan**: the work split into small tasks, each one testable on its own
+   (`docs/superpowers/plans/`)
+3. **Backend first**: the style catalog and prompt builder, then the rate limiter, the Hugging
+   Face provider and the `/api/tryon` route, each with tests
+4. **Frontend**: image resizing and the API client, then the session reducer and the screens
+   (selfie → studio → lookbook → show the barber)
+5. **Hardening from real-device testing**: iOS camera playback, phone layout, aborting abandoned
+   generations, and a shop-wide limiter for shared Wi-Fi
+6. **Redesign**: a modern UI, Android and iOS PWA support, and laptop and desktop layouts
+7. **Resilience**: backup AI services once the free Hugging Face quota turned out to be the main
+   bottleneck in practice
 
-## 4. Backup AI services (more looks when the free quota runs out)
+## Project structure
 
-When the Hugging Face Space says it's busy or the free daily allowance is used up, the server
-automatically tries the next service in this order:
+```
+server/            Express API
+  app.ts           /api/tryon route, validation, error mapping
+  rateLimit.ts     per-connection fair-use limiter
+  prompt.ts        style → edit prompt
+  provider/        AI services (Hugging Face, Cloudflare, fal.ai, Gemini) and the fallback chain
+shared/styles.ts   style catalog shared by client and server
+src/               React app
+  screens/         Selfie, Studio, Lookbook, ShowBarber
+  state/session.ts session reducer
+  lib/             image resizing, API client
+tests/             mirrors server/, shared/ and src/
+scripts/           try-model.ts, a CLI for testing other AI models and styles
+```
 
-1. The main Space (`HF_SPACE`)
-2. Any extra Spaces in `HF_FALLBACK_SPACES`
-3. **Cloudflare Workers AI (free)** if `CF_ACCOUNT_ID` and `CF_API_TOKEN` are set: FLUX.2 [klein],
-   from the same company as the main model. The free allowance is 10,000 "neurons" a day, roughly 90 looks (estimated from
-   Cloudflare's price list),
-   and it refills every day at midnight UTC. No card needed.
-4. **fal.ai (paid)** if `FAL_KEY` is set: the same FLUX Kontext model as the main Space. Paid per image.
-5. **Google Gemini (paid)** if `GEMINI_API_KEY` is set. Gemini's image model is paid in the API
-   (its free period has ended). Looks may differ a bit from FLUX.
+## Run it locally
 
-Add only the keys you want; with none, it works exactly as before. To stay free, set just the
-Cloudflare settings. A service that says it's busy is skipped for 5 minutes, so later customers go
-straight to the backup instead of waiting. When the server starts it prints the order it will use,
-e.g. `AI services, in order: hf:... → cloudflare`. On Render, add the keys under Environment.
+Requires Node.js 22.12+.
 
-- **Cloudflare (free):** create a free account at https://dash.cloudflare.com. Your Account ID is on the
-  Workers & Pages page. For the token: My Profile, then API Tokens, then Create Token, and use the
-  "Workers AI" template. Put them in `CF_ACCOUNT_ID` and `CF_API_TOKEN`.
-- **fal.ai key:** sign up at https://fal.ai, add credit, then Dashboard, then Keys. Check their pricing page for the current price per image.
-- **Gemini key:** sign in at https://aistudio.google.com/apikey and create a key. Image editing is billed, so add billing in Google AI Studio.
-- **Extra Spaces** use your `HF_TOKEN` too. Another free (ZeroGPU) Space shares the same daily
-  allowance as the main one, so it only helps when one Space is overloaded or down, not when the
-  allowance is used up. Format: `owner/space|/endpoint|image_param`, comma-separated.
+```bash
+npm install
+cp .env.example .env    # add your own free Hugging Face token (see the setup guide)
+npm run dev             # http://localhost:5173
+```
 
-All keys stay on the server, like the Hugging Face token. The selfie is sent to whichever service
-makes the look.
-
-## 5. Switching to a different or paid AI
-
-Change `HF_SPACE` (and `HF_ENDPOINT` if that Space uses a different function name) in `.env`
-or in Render's Environment settings, then restart. For a paid or private Space, use a token
-from the account that owns or pays for it. No code changes are needed as long as the Space
-takes an input image and a text prompt.
-
-### About the model choice
-
-`FLUX.1-Kontext-Dev` was only lightly tested: 1 portrait, 2 styles (bald, rasta), and both kept the
-face, glasses, clothes and background well. Skin fade and other portraits were not tested.
-To test a model or style yourself:
-
-`npx tsx scripts/try-model.ts <space> <endpoint> <photo.jpg> "<style phrase>"`
-
-(`HF_TOKEN` is read from the environment; `IMAGE_PARAM=image` changes the image field name for Spaces that use it.)
-
-## Developer notes
-
-- `npm test` runs the tests, `npm run build` builds the site into `dist/`.
-- Server: `server/`, client: `src/`. Image data is never logged.
+The full setup, environment variables, free backup AI services, and deploying to Render are
+covered in **[docs/SETUP.md](docs/SETUP.md)**.
