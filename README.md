@@ -10,6 +10,42 @@ No accounts, no database, and no photos are stored. It runs entirely on free ser
 > **Stack:** React 19 · TypeScript · Vite · Node.js / Express 5 · FLUX.1 Kontext (Hugging Face) · Vitest
 > · deployed on Render
 
+<table>
+  <tr>
+    <th>Before</th>
+    <th>Skin fade</th>
+    <th>Buzz cut</th>
+    <th>Afro</th>
+  </tr>
+  <tr>
+    <td><img src="docs/images/before.jpg" alt="Original photo" width="200"></td>
+    <td><img src="docs/images/after-skin-fade.jpg" alt="Same person with a skin fade" width="200"></td>
+    <td><img src="docs/images/after-buzz-cut.jpg" alt="Same person with a buzz cut" width="200"></td>
+    <td><img src="docs/images/after-afro.jpg" alt="Same person with an afro" width="200"></td>
+  </tr>
+</table>
+
+<sub>Real output from the app. The "before" portrait is an AI-generated, fictional person, not a
+real customer.</sub>
+
+## Screenshots
+
+**Desktop**
+
+| Start | Generating |
+| --- | --- |
+| ![Start screen: upload a photo or take a selfie](docs/images/desktop-home.jpg) | ![Generating a skin fade with the barber-pole progress bar](docs/images/desktop-generating.jpg) |
+| **Result** | **Lookbook** |
+| ![Result: skin fade, with the style picker beside it](docs/images/desktop-result.jpg) | ![Lookbook with three looks, skin fade starred](docs/images/desktop-lookbook.jpg) |
+
+**Phone**
+
+<p>
+  <img src="docs/images/phone-result.jpg" alt="Phone: skin fade result with the style strip" width="260">
+  &nbsp;
+  <img src="docs/images/phone-lookbook.jpg" alt="Phone: lookbook with Show my barber button" width="260">
+</p>
+
 ---
 
 ## Features
